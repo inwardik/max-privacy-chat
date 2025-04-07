@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Application with File Sharing</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .chat-container {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 20px;
+            height: 400px;
+            overflow-y: auto;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            word-wrap: break-word;
+        }
+        .received {
+            background-color: #f1f1f1;
+            text-align: left;
+        }
+        .sent {
+            background-color: #e3f2fd;
+            text-align: right;
+        }
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+        #message-input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .button:hover {
+            background-color: #45a049;
+        }
+        #file-button {
+            background-color: #2196F3;
+        }
+        #file-button:hover {
+            background-color: #0b7dda;
+        }
+        .file-input-container {
+            position: relative;
+            display: inline-block;
+        }
+        #file-input {
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+        .status {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            margin-bottom: 10px;
+        }
+        .file-message {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .file-message.sent {
+            flex-direction: row-reverse;
+        }
+        .file-message.sent .file-icon {
+            margin-right: 0;
+            margin-left: 10px;
+        }
+        .file-icon {
+            margin-right: 10px;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .file-details {
+            flex-grow: 1;
+        }
+        .file-message.sent .file-details {
+            text-align: right;
+        }
+        .file-name {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .file-size {
+            font-size: 12px;
+            color: #666;
+        }
+        .file-download {
+            color: #2196F3;
+            text-decoration: none;
+            font-weight: bold;
+            margin: 0 10px;
+        }
+        .file-download:hover {
+            text-decoration: underline;
+        }
+        .controls-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+        #selected-file-name {
+            padding: 5px 10px;
+            background-color: #f1f1f1;
+            border-radius: 3px;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            display: none;
+        }
+        .progress-container {
+            margin-top: 10px;
+            display: none;
+        }
+        .progress-bar {
+            height: 10px;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #4CAF50;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .progress-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>Real-time Chat with File Sharing</h1>
+    <div class="chat-container" id="chat-container">
+        <div class="status">Connected to chat server</div>
+    </div>
+    
+    <div class="controls-container">
+        <div class="file-input-container">
+            <button class="button" id="file-button">Choose File</button>
+            <input type="file" id="file-input">
+        </div>
+        <div id="selected-file-name"></div>
+    </div>
+    
+    <div class="progress-container" id="progress-container">
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-text" id="progress-text">Uploading: 0%</div>
+    </div>
+    
+    <div class="input-container">
+        <input type="text" id="message-input" placeholder="Type your message here...">
+        <button class="button" id="send-button">Send</button>
+    </div>
+
+    <script>
+        // Connect to the Socket.IO server
+        const socket = io();
+        const chatContainer = document.getElementById('chat-container');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
+        const fileInput = document.getElementById('file-input');
+        const selectedFileName = document.getElementById('selected-file-name');
+        const progressContainer = document.getElementById('progress-container');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+        
+        // Constants for file chunking
+        const CHUNK_SIZE = 100 * 1024; // 100KB chunks
+        
+        // Handle connection
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            addStatusMessage('Connected to chat server');
+        });
+
+        // Handle disconnection
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            addStatusMessage('Disconnected from chat server');
+        });
+
+        // Handle incoming messages
+        socket.on('chat_message', (data) => {
+            console.log('Received message:', data);
+            addMessage(data, 'received');
+        });
+        
+        // Handle incoming files
+        socket.on('file_message', (data) => {
+            console.log('Received file:', data);
+            addFileMessage(data);
+            
+            // Hide progress if it was our file upload
+            if (data.isSender) {
+                progressContainer.style.display = 'none';
+            }
+        });
+        
+        // Handle chunk receipt acknowledgment
+        socket.on('chunk_received', (data) => {
+            const progress = data.progress;
+            progressFill.style.width = `${progress}%`;
+            progressText.textContent = `Uploading: ${Math.round(progress)}%`;
+        });
+        
+        // Handle errors
+        socket.on('error', (data) => {
+            console.error('Error:', data.message);
+            addStatusMessage('Error: ' + data.message);
+            progressContainer.style.display = 'none';
+        });
+
+        // Send message function
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (message) {
+                console.log('Sending message:', message);
+                socket.emit('chat_message', message);
+                addMessage(message, 'sent');
+                messageInput.value = '';
+            }
+        }
+
+        // Add message to chat container
+        function addMessage(message, type) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', type);
+            messageElement.textContent = message;
+            chatContainer.appendChild(messageElement);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // Add file message to chat container
+        function addFileMessage(fileData) {
+            const fileElement = document.createElement('div');
+            fileElement.classList.add('file-message', fileData.isSender ? 'sent' : 'received');
+            
+            const fileSize = formatFileSize(fileData.size);
+            
+            // SVG icon for attachment
+            const fileIconSvg = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"></path>
+                </svg>
+            `;
+            
+            fileElement.innerHTML = `
+                <div class="file-icon">${fileIconSvg}</div>
+                <div class="file-details">
+                    <div class="file-name">${fileData.filename}</div>
+                    <div class="file-size">${fileSize}</div>
+                </div>
+                <a href="${fileData.url}" class="file-download" download>Download</a>
+            `;
+            
+            chatContainer.appendChild(fileElement);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // Add status message
+        function addStatusMessage(message) {
+            const statusElement = document.createElement('div');
+            statusElement.classList.add('status');
+            statusElement.textContent = message;
+            chatContainer.appendChild(statusElement);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' bytes';
+            else if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            else return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+        
+        // Generate a unique ID
+        function generateUniqueId() {
+            return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        }
+        
+        // Send file in chunks
+        function sendFileInChunks(file) {
+            const fileId = generateUniqueId();
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                const fileData = e.target.result;
+                const totalSize = fileData.length;
+                const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
+                let currentChunk = 0;
+                
+                // Show progress bar
+                progressContainer.style.display = 'block';
+                progressFill.style.width = '0%';
+                progressText.textContent = 'Uploading: 0%';
+                
+                // Function to send a chunk
+                function sendChunk() {
+                    if (currentChunk >= totalChunks) {
+                        return; // All chunks sent
+                    }
+                    
+                    const start = currentChunk * CHUNK_SIZE;
+                    const end = Math.min(start + CHUNK_SIZE, totalSize);
+                    const chunk = fileData.slice(start, end);
+                    const chunkId = generateUniqueId();
+                    
+                    // Send the chunk
+                    socket.emit('file_chunk', {
+                        fileId: fileId,
+                        chunkId: chunkId,
+                        currentChunk: currentChunk,
+                        totalChunks: totalChunks,
+                        chunk: chunk,
+                        originalName: file.name
+                    });
+                    
+                    currentChunk++;
+                }
+                
+                // Start sending chunks
+                for (let i = 0; i < Math.min(5, totalChunks); i++) {
+                    sendChunk();
+                }
+                
+                // Set up listener for chunk acknowledgment
+                socket.on('chunk_received', function chunkReceived(data) {
+                    if (data.fileId === fileId) {
+                        // Send next chunk
+                        sendChunk();
+                        
+                        // If this was the last chunk, remove the listener
+                        if (currentChunk >= totalChunks) {
+                            socket.off('chunk_received', chunkReceived);
+                        }
+                    }
+                });
+            };
+            
+            reader.readAsDataURL(file);
+        }
+        
+        // Handle file selection
+        fileInput.addEventListener('change', (e) => {
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                if (file.size > 50 * 1024 * 1024) {
+                    addStatusMessage('Error: File size exceeds 50MB limit');
+                    fileInput.value = '';
+                    selectedFileName.style.display = 'none';
+                    return;
+                }
+                
+                selectedFileName.textContent = file.name;
+                selectedFileName.style.display = 'block';
+                
+                // Send file in chunks
+                sendFileInChunks(file);
+                
+                // Reset the file input
+                fileInput.value = '';
+                setTimeout(() => {
+                    selectedFileName.style.display = 'none';
+                }, 3000);
+            }
+        });
+
+        // Event listeners
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
